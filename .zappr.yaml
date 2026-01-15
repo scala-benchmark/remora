@@ -1,0 +1,8 @@
+X-Zalando-Team: buffalo
+approvals:
+  groups:
+    zalando:
+      minimum: 2
+      from:
+        orgs:
+          - "zalando"
