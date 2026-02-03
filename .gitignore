@@ -28,3 +28,5 @@ __pycache__/
 # Stups
 user.json
 client.json
+
+default.sarif
