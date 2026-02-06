@@ -1,9 +1,12 @@
 import akka.actor.ActorSystem
+import akka.stream.Materializer
 import com.codahale.metrics.jvm.{GarbageCollectorMetricSet, MemoryUsageGaugeSet, ThreadStatesGaugeSet}
 import com.typesafe.scalalogging.LazyLogging
 import config.{KafkaSettings, MetricsSettings}
 import kafka.admin.RemoraKafkaConsumerGroupService
 import reporter.{RemoraCloudWatchReporter, RemoraDatadogReporter}
+import remote.RemoteApiClient
+import sttp.client3.akkahttp.AkkaHttpBackend
 
 import scala.concurrent.duration._
 
@@ -12,16 +15,23 @@ object RemoraApp extends App with nl.grons.metrics4.scala.DefaultInstrumented wi
   private val actorSystemName: String = "remora"
   implicit val actorSystem = ActorSystem(actorSystemName)
 
+  SquerylInit.init()
+
   metricRegistry.registerAll(new GarbageCollectorMetricSet)
   metricRegistry.registerAll(new MemoryUsageGaugeSet)
   metricRegistry.registerAll(new ThreadStatesGaugeSet)
 
   implicit val executionContext = actorSystem.dispatchers.lookup("kafka-consumer-dispatcher")
+  implicit val materializer = Materializer(actorSystem)
+  val insecureWsClient = InsecureWsClientFactory.createWsClient()
   val kafkaSettings = KafkaSettings(actorSystem.settings.config)
   val consumer = new RemoraKafkaConsumerGroupService(kafkaSettings)
   val kafkaClientActor = actorSystem.actorOf(KafkaClientActor.props(consumer), name = "kafka-client-actor")
 
-  Api(kafkaClientActor).start()
+  Api(kafkaClientActor, insecureWsClient).start()
+
+  implicit val sttpBackend = AkkaHttpBackend.usingActorSystem(actorSystem)
+  RemoteApiClient.sendHeartbeat("http://127.0.0.1:9000")
 
   val metricsSettings = MetricsSettings(actorSystem.settings.config)
 

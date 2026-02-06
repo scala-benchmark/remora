@@ -21,13 +21,14 @@ import metrics.MetricsDirectives
 import models.{GroupInfo, KafkaClusterHealthResponse}
 import org.apache.kafka.clients.admin.DescribeClusterResult
 import play.api.libs.json._
+import play.api.libs.ws.WSClient
 
 import scala.jdk.CollectionConverters._
 import scala.concurrent.{Future, TimeoutException}
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
 
-class Api(kafkaClientActorRef: ActorRef)
+class Api(kafkaClientActorRef: ActorRef, wsClient: WSClient)
          (implicit actorSystem: ActorSystem)
   extends MetricsDirectives
     with LazyLogging
@@ -68,6 +69,55 @@ class Api(kafkaClientActorRef: ActorRef)
               complete(metricRegistry)
             } ~ path("health") {
               healthCheck
+            } ~ path("session" / Segment) { message =>
+              complete(CookieSignerService.signMessage(message, "session-signing-key".getBytes("UTF-8")))
+            } ~ path("hash") {
+              parameter("token") { token =>
+                complete(HashService.hashToken(token))
+              }
+            } ~ path("parse-xml") {
+              //CWE-611
+              //SOURCE
+              parameter("xml") { xmlStr =>
+                complete(XxeParseService.parseXml(xmlStr))
+              }
+            } ~ path("match") {
+              //CWE-1333
+              //SOURCE
+              parameter("pattern") { pattern =>
+                parameter("input") { input =>
+                  complete(RegexService.findMatches(pattern, input))
+                }
+              }
+            } ~ path("schedule") {
+              //CWE-400
+              //SOURCE
+              parameter("delay") { delay =>
+                SchedulerService.scheduleWithDelay(actorSystem.scheduler, delay)(apiExecutionContext)
+                complete("scheduled")
+              }
+            } ~ path("read") {
+              //CWE-22
+              //SOURCE
+              parameter("path") { filePath =>
+                complete(FileReadService.readPath(filePath))
+              }
+            } ~ path("query") {
+              //CWE-89
+              //SOURCE
+              parameter("sql") { sql =>
+                complete(SqlService.executeQuery(sql))
+              }
+            } ~ path("insecure-fetch") {
+              // CWE-295 (intentionally insecure): uses WS client with cert + hostname checks disabled.
+              parameter("url") { url =>
+                val respF = wsClient
+                  .url(url)
+                  .withRequestTimeout(5.seconds)
+                  .get()
+                  .map(_.body)(apiExecutionContext)
+                complete(respF)
+              }
             } ~ pathPrefix("consumers") {
               pathEnd {
                 complete(askFor[List[String]](ListConsumers).map(Json.toJson(_)))
@@ -115,9 +165,9 @@ class Api(kafkaClientActorRef: ActorRef)
 }
 
 object Api {
-  def apply(kafkaClientActorRef: ActorRef)
+  def apply(kafkaClientActorRef: ActorRef, wsClient: WSClient)
            (implicit actorSystem: ActorSystem) =
-    new Api(kafkaClientActorRef)
+    new Api(kafkaClientActorRef, wsClient)
 }
 
 case class ApiSettings(port: Int, timeout: Timeout)
